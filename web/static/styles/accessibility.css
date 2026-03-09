@@ -1,0 +1,56 @@
+/* Accessibility Styles */
+/* Requirements: 4.1, 4.3, 4.4 */
+
+/* ── Reduced Motion ── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Focus Visible — keyboard navigation ── */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Remove default outline for mouse/touch users */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ── Skip-to-content link ── */
+.skip-link {
+  position: absolute;
+  top: -100%;
+  left: var(--space-2);
+  z-index: 200;
+  padding: var(--space-1) var(--space-2);
+  background-color: var(--color-primary);
+  color: #fff;
+  font-weight: 600;
+  border-radius: 0 0 6px 6px;
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+/* ── Screen reader only utility ── */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

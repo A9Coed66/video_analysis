@@ -1,0 +1,417 @@
+/* Component Styles — Upload Zone, Progress, Audio Player, Buttons, Cards, Results */
+/* Requirements: 5.1, 6.2, 7.4 */
+
+/* ══════════════════════════════════════
+   Upload Zone
+   ══════════════════════════════════════ */
+
+.upload-zone {
+  border: 2px dashed var(--color-text-secondary);
+  border-radius: 12px;
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s;
+  background-color: transparent;
+}
+
+.upload-zone:hover {
+  border-color: var(--color-primary);
+}
+
+/* Drag-over state */
+.upload-zone--dragover {
+  border-color: var(--color-primary);
+  background-color: rgba(108, 99, 255, 0.08);
+}
+
+.upload-zone__icon {
+  font-size: 2.5rem;
+  margin-bottom: var(--space-2);
+  color: var(--color-text-secondary);
+}
+
+.upload-zone__label {
+  font-size: 1rem;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-1);
+}
+
+.upload-zone__hint {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  opacity: 0.7;
+}
+
+/* File info shown after valid selection */
+.upload-zone__file-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-surface);
+  border-radius: 8px;
+  margin-top: var(--space-2);
+  font-size: 0.875rem;
+  color: var(--color-text-primary);
+}
+
+.upload-zone__file-info .file-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+
+.upload-zone__file-info .file-size {
+  color: var(--color-text-secondary);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Error message */
+.upload-zone__error {
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-error);
+  font-size: 0.8125rem;
+  border-radius: 6px;
+  background-color: rgba(255, 71, 87, 0.1);
+}
+
+
+/* ══════════════════════════════════════
+   Progress Indicator
+   ══════════════════════════════════════ */
+
+.progress {
+  width: 100%;
+}
+
+/* Single bar (Voice Separator) */
+.progress__bar-wrapper {
+  height: 6px;
+  background-color: var(--color-surface);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress__bar {
+  height: 100%;
+  background-color: var(--color-primary);
+  border-radius: 3px;
+  width: 0%;
+  transition: width 0.4s ease;
+}
+
+.progress__bar--indeterminate {
+  width: 40%;
+  animation: progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+.progress__label {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  margin-top: var(--space-1);
+  text-align: center;
+}
+
+/* Multi-step (Pipeline) */
+.progress__steps {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.progress__step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  position: relative;
+}
+
+.progress__step-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: var(--color-surface);
+  border: 2px solid var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  transition: background-color 0.3s, border-color 0.3s, color 0.3s;
+  z-index: 1;
+}
+
+.progress__step--active .progress__step-dot {
+  border-color: var(--color-primary);
+  background-color: var(--color-primary);
+  color: #fff;
+}
+
+.progress__step--completed .progress__step-dot {
+  border-color: var(--color-success);
+  background-color: var(--color-success);
+  color: #fff;
+}
+
+.progress__step-label {
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary);
+  margin-top: var(--space-1);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.progress__step--active .progress__step-label {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.progress__step--completed .progress__step-label {
+  color: var(--color-success);
+}
+
+/* Connector line between steps */
+.progress__step-connector {
+  flex: 1;
+  height: 2px;
+  background-color: var(--color-text-secondary);
+  opacity: 0.3;
+  align-self: flex-start;
+  margin-top: 12px; /* center with dot */
+}
+
+.progress__step-connector--completed {
+  background-color: var(--color-success);
+  opacity: 1;
+}
+
+
+/* ══════════════════════════════════════
+   Audio Player
+   ══════════════════════════════════════ */
+
+.audio-player {
+  background-color: var(--color-surface);
+  border-radius: 10px;
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.audio-player__label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+
+.audio-player audio {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+}
+
+/* Tint native audio controls for dark theme (Webkit) */
+.audio-player audio::-webkit-media-controls-panel {
+  background-color: var(--color-surface);
+}
+
+.audio-player__download {
+  flex-shrink: 0;
+}
+
+/* ══════════════════════════════════════
+   Buttons
+   ══════════════════════════════════════ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s, opacity 0.2s;
+  text-decoration: none;
+  line-height: 1.4;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Primary — filled */
+.btn--primary {
+  background-color: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background-color: #5a52e0;
+  border-color: #5a52e0;
+}
+
+/* Secondary — outlined */
+.btn--secondary {
+  background-color: transparent;
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.btn--secondary:hover:not(:disabled) {
+  background-color: rgba(108, 99, 255, 0.1);
+}
+
+/* Small variant */
+.btn--sm {
+  padding: 4px var(--space-2);
+  font-size: 0.8125rem;
+  border-radius: 6px;
+}
+
+
+/* ══════════════════════════════════════
+   Cards
+   ══════════════════════════════════════ */
+
+.card {
+  background-color: var(--color-surface);
+  border-radius: 12px;
+  padding: var(--space-3);
+}
+
+.card__title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-2);
+}
+
+/* ══════════════════════════════════════
+   Section Headers
+   ══════════════════════════════════════ */
+
+.section-title {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-1);
+}
+
+.section-subtitle {
+  font-size: 1rem;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-4);
+}
+
+/* ══════════════════════════════════════
+   Results Area
+   ══════════════════════════════════════ */
+
+.results {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+/* Two-column grid for separation results on wider screens */
+@media (min-width: 768px) {
+  .results--separation {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Transcript table */
+.results__transcript {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.results__transcript th,
+.results__transcript td {
+  padding: var(--space-1) var(--space-2);
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.results__transcript th {
+  color: var(--color-text-secondary);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.results__transcript td {
+  color: var(--color-text-primary);
+}
+
+.results__transcript .speaker-label {
+  color: var(--color-primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.results__transcript .timestamp {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Error state inside results */
+.results__error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--color-error);
+  font-size: 0.9375rem;
+}
+
+/* ══════════════════════════════════════
+   Responsive tweaks for components
+   ══════════════════════════════════════ */
+
+@media (max-width: 767px) {
+  .upload-zone {
+    padding: var(--space-4) var(--space-2);
+  }
+
+  .audio-player {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .audio-player audio {
+    width: 100%;
+  }
+
+  .progress__steps {
+    gap: 0;
+  }
+
+  .progress__step-label {
+    font-size: 0.5625rem;
+  }
+}
