@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Separator</title>
+  <link rel="stylesheet" href="/styles/theme.css">
+  <link rel="stylesheet" href="/styles/layout.css">
+  <link rel="stylesheet" href="/styles/components.css">
+  <link rel="stylesheet" href="/styles/accessibility.css">
+</head>
+<body>
+
+  <!-- Skip-to-content link for keyboard users -->
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <!-- ── Navigation ── -->
+  <nav class="navbar" aria-label="Main navigation">
+    <a href="#" class="navbar__brand">Voice Separator</a>
+    <button class="navbar__toggle" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="navbar-links">
+      <span aria-hidden="true">&#9776;</span>
+    </button>
+    <ul id="navbar-links" class="navbar__links" role="list">
+      <li><a href="#voice-separator">Voice Separator</a></li>
+      <li><a href="#pipeline">Pipeline</a></li>
+    </ul>
+  </nav>
+
+  <!-- ── Hero Section ── -->
+  <header class="hero-section">
+    <div class="container">
+      <h1 class="hero__title">Separate Voices with AI</h1>
+      <p class="hero__subtitle">Split audio tracks by speaker using state-of-the-art DPRNN-TasNet, or run a full processing pipeline with diarization, transcription and more.</p>
+      <div class="hero__image-placeholder" role="img" aria-label="Voice separation illustration" style="width: 100%; max-width: 600px; aspect-ratio: 16 / 9; background: linear-gradient(135deg, var(--color-secondary), var(--color-surface)); border-radius: 12px; margin: var(--space-4) auto;"></div>
+      <div class="hero__actions">
+        <a href="#voice-separator" class="btn btn--primary" aria-label="Go to Voice Separator section">Separate Voices</a>
+        <a href="#pipeline" class="btn btn--secondary" aria-label="Go to Pipeline section">Run Pipeline</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Main Content ── -->
+  <main id="main-content">
+
+    <!-- ══ Voice Separator Section ══ -->
+    <section id="voice-separator" aria-labelledby="vs-title">
+      <div class="container">
+        <h2 id="vs-title" class="section-title">Voice Separator</h2>
+        <p class="section-subtitle">Upload an audio file containing 2 speakers to separate their voices.</p>
+        <p class="upload-zone__hint-section">The audio file should contain exactly 2 speakers for best results.</p>
+
+        <!-- Upload Zone -->
+        <div class="upload-zone" id="vs-upload-zone" role="button" tabindex="0" aria-label="Upload audio file for voice separation. Drag and drop or click to select.">
+          <div class="upload-zone__icon" aria-hidden="true">&#127911;</div>
+          <p class="upload-zone__label">Drag &amp; drop your audio file here, or click to browse</p>
+          <p class="upload-zone__hint">Supported formats: WAV, MP3, FLAC, OGG</p>
+          <input type="file" id="vs-file-input" class="sr-only" accept=".wav,.mp3,.flac,.ogg" aria-label="Select audio file for voice separation">
+        </div>
+
+        <!-- File info (hidden by default) -->
+        <div class="upload-zone__file-info" id="vs-file-info" hidden>
+          <span class="file-name" id="vs-file-name"></span>
+          <span class="file-size" id="vs-file-size"></span>
+        </div>
+
+        <!-- Audio preview -->
+        <div class="audio-player" id="vs-audio-preview" hidden>
+          <span class="audio-player__label">Preview</span>
+          <audio id="vs-audio-element" controls aria-label="Preview of uploaded audio"></audio>
+        </div>
+
+        <!-- Error message (hidden by default) -->
+        <div class="upload-zone__error" id="vs-error" role="alert" hidden></div>
+
+        <!-- Separate button -->
+        <button class="btn btn--primary" id="vs-separate-btn" disabled aria-label="Separate voices from uploaded audio">Separate</button>
+
+        <!-- Progress indicator (hidden by default) -->
+        <div class="progress" id="vs-progress" hidden aria-label="Voice separation progress">
+          <div class="progress__bar-wrapper">
+            <div class="progress__bar progress__bar--indeterminate"></div>
+          </div>
+          <p class="progress__label">Separating voices…</p>
+        </div>
+
+        <!-- Results area (hidden by default) -->
+        <div class="results results--separation" id="vs-results" hidden>
+          <div class="card">
+            <h3 class="card__title">Speaker 1</h3>
+            <div class="audio-player">
+              <span class="audio-player__label">Speaker 1</span>
+              <audio id="vs-speaker1-audio" controls aria-label="Separated audio for Speaker 1"></audio>
+              <a class="btn btn--sm btn--secondary audio-player__download" id="vs-speaker1-download" href="#" download aria-label="Download Speaker 1 audio">Download</a>
+            </div>
+          </div>
+          <div class="card">
+            <h3 class="card__title">Speaker 2</h3>
+            <div class="audio-player">
+              <span class="audio-player__label">Speaker 2</span>
+              <audio id="vs-speaker2-audio" controls aria-label="Separated audio for Speaker 2"></audio>
+              <a class="btn btn--sm btn--secondary audio-player__download" id="vs-speaker2-download" href="#" download aria-label="Download Speaker 2 audio">Download</a>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ══ Pipeline Section ══ -->
+    <section id="pipeline" aria-labelledby="pl-title">
+      <div class="container">
+        <h2 id="pl-title" class="section-title">Pipeline</h2>
+        <p class="section-subtitle">Upload audio to run the full processing pipeline: chunking, diarization, separation, transcription and unification.</p>
+
+        <!-- Upload Zone -->
+        <div class="upload-zone" id="pl-upload-zone" role="button" tabindex="0" aria-label="Upload audio file for pipeline processing. Drag and drop or click to select.">
+          <div class="upload-zone__icon" aria-hidden="true">&#128196;</div>
+          <p class="upload-zone__label">Drag &amp; drop your audio file here, or click to browse</p>
+          <p class="upload-zone__hint">Supported formats: WAV, MP3, MP4, FLAC, OGG</p>
+          <input type="file" id="pl-file-input" class="sr-only" accept=".wav,.mp3,.mp4,.flac,.ogg" aria-label="Select audio file for pipeline processing">
+        </div>
+
+        <!-- File info (hidden by default) -->
+        <div class="upload-zone__file-info" id="pl-file-info" hidden>
+          <span class="file-name" id="pl-file-name"></span>
+          <span class="file-size" id="pl-file-size"></span>
+        </div>
+
+        <!-- Audio preview -->
+        <div class="audio-player" id="pl-audio-preview" hidden>
+          <span class="audio-player__label">Preview</span>
+          <audio id="pl-audio-element" controls aria-label="Preview of uploaded audio"></audio>
+        </div>
+
+        <!-- Error message (hidden by default) -->
+        <div class="upload-zone__error" id="pl-error" role="alert" hidden></div>
+
+        <!-- Process button -->
+        <button class="btn btn--primary" id="pl-process-btn" disabled aria-label="Process audio through full pipeline">Process</button>
+
+        <!-- Multi-step progress indicator (hidden by default) -->
+        <div class="progress" id="pl-progress" hidden aria-label="Pipeline processing progress">
+          <div class="progress__steps">
+            <div class="progress__step" data-step="chunking">
+              <div class="progress__step-dot">1</div>
+              <span class="progress__step-label">Chunking</span>
+            </div>
+            <div class="progress__step-connector" aria-hidden="true"></div>
+            <div class="progress__step" data-step="diarization">
+              <div class="progress__step-dot">2</div>
+              <span class="progress__step-label">Diarization</span>
+            </div>
+            <div class="progress__step-connector" aria-hidden="true"></div>
+            <div class="progress__step" data-step="separation">
+              <div class="progress__step-dot">3</div>
+              <span class="progress__step-label">Separation</span>
+            </div>
+            <div class="progress__step-connector" aria-hidden="true"></div>
+            <div class="progress__step" data-step="transcription">
+              <div class="progress__step-dot">4</div>
+              <span class="progress__step-label">Transcription</span>
+            </div>
+            <div class="progress__step-connector" aria-hidden="true"></div>
+            <div class="progress__step" data-step="unification">
+              <div class="progress__step-dot">5</div>
+              <span class="progress__step-label">Unification</span>
+            </div>
+          </div>
+          <p class="progress__label" id="pl-progress-label">Processing…</p>
+        </div>
+
+        <!-- Results area (hidden by default) -->
+        <div class="results" id="pl-results" hidden>
+          <div class="card">
+            <h3 class="card__title">Transcript</h3>
+            <div style="overflow-x: auto;">
+              <table class="results__transcript" id="pl-transcript-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Speaker</th>
+                    <th scope="col">Start</th>
+                    <th scope="col">End</th>
+                    <th scope="col">Text</th>
+                  </tr>
+                </thead>
+                <tbody id="pl-transcript-body">
+                  <!-- Transcript rows populated by JS -->
+                </tbody>
+              </table>
+            </div>
+            <a class="btn btn--sm btn--secondary" id="pl-download-btn" href="#" download aria-label="Download transcript output" hidden>Download Transcript</a>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ── Footer ── -->
+  <footer>
+    <div class="container">
+      <p><strong>Voice Separator</strong> — AI-powered audio voice separation and transcription.</p>
+    </div>
+  </footer>
+
+  <!-- Scripts -->
+  <script src="/js/api.js"></script>
+  <script src="/js/upload.js"></script>
+  <script src="/js/audio-player.js"></script>
+  <script src="/js/app.js"></script>
+
+</body>
+</html>
