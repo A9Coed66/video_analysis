@@ -59,6 +59,25 @@ output/
     └── SPEAKER_01/
 ```
 
+## Demo — Speaker Separation Results
+
+Sample results from the current model. Each mix is a 2-speaker audio that gets separated into individual speaker tracks.
+
+```
+sample/
+├── mix_1.wav                 # Input: 2 speakers mixed
+├── mix_1_speaker_1.wav       # Output: Speaker 1 isolated
+├── mix_1_speaker_2.wav       # Output: Speaker 2 isolated
+├── mix_2.wav                 # Input: 2 speakers mixed
+├── mix_2_speaker_1.wav       # Output: Speaker 1 isolated
+└── mix_2_speaker_2.wav       # Output: Speaker 2 isolated
+```
+
+| Sample | Input (mixed) | Output Speaker 1 | Output Speaker 2 |
+|--------|---------------|-------------------|-------------------|
+| Mix 1  | [mix_1.wav](sample/mix_1.wav) | [mix_1_speaker_1.wav](sample/mix_1_speaker_1.wav) | [mix_1_speaker_2.wav](sample/mix_1_speaker_2.wav) |
+| Mix 2  | [mix_2.wav](sample/mix_2.wav) | [mix_2_speaker_1.wav](sample/mix_2_speaker_1.wav) | [mix_2_speaker_2.wav](sample/mix_2_speaker_2.wav) |
+
 ## Project Status
 
 ### 1. Speaker Separator Model — ✅ Done (fine-tuning ongoing)
