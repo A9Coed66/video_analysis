@@ -11,6 +11,7 @@ import random
 import time
 from collections import Counter
 from pathlib import Path
+from multiprocessing import Pool, cpu_count
 
 import numpy as np
 import soundfile as sf
@@ -99,7 +100,6 @@ def create_mixture(
     mix = s1 + s2_scaled
     return mix.astype(np.float32), s1.astype(np.float32), s2_scaled.astype(np.float32)
 
-
 def _read_wav_safe(wav_path: Path) -> np.ndarray | None:
     """Đọc file WAV an toàn, trả về None nếu file hỏng.
 
@@ -116,6 +116,72 @@ def _read_wav_safe(wav_path: Path) -> np.ndarray | None:
         logger.warning(f"Không đọc được file WAV {wav_path}: {e}")
         return None
 
+def _worker_one_mixture(args):
+    """Hàm worker chạy trong process con, tạo 1 mixture và lưu 3 file.
+
+    Args:
+        args: tuple
+          (i, split_dir, output_dir, snr_choices, seed, max_retries)
+    """
+    (i, split_dir, output_dir, snr_choices, seed, max_retries) = args
+
+    rng = random.Random(seed + i)
+
+    # Liệt kê segments (mỗi worker tự load)
+    speaker_segments = list_segments(split_dir)
+    speaker_ids = list(speaker_segments.keys())
+
+    if len(speaker_ids) < 2:
+        return None  # không tạo được
+
+    # Chọn 2 speakers khác nhau
+    spk1, spk2 = rng.sample(speaker_ids, 2)
+
+    # Chọn segment ngẫu nhiên từ mỗi speaker, retry nếu file hỏng
+    s1_audio = None
+    for _ in range(max_retries):
+        seg1_path = rng.choice(speaker_segments[spk1])
+        s1_audio = _read_wav_safe(seg1_path)
+        if s1_audio is not None:
+            break
+    if s1_audio is None:
+        logger.warning(f"Mixture {i}: Không đọc được segment từ {spk1}, bỏ qua")
+        return None
+
+    s2_audio = None
+    for _ in range(max_retries):
+        seg2_path = rng.choice(speaker_segments[spk2])
+        s2_audio = _read_wav_safe(seg2_path)
+        if s2_audio is not None:
+            break
+    if s2_audio is None:
+        logger.warning(f"Mixture {i}: Không đọc được segment từ {spk2}, bỏ qua")
+        return None
+
+    # Đảm bảo cùng độ dài (cắt theo min length)
+    min_len = min(len(s1_audio), len(s2_audio))
+    s1_audio = s1_audio[:min_len]
+    s2_audio = s2_audio[:min_len]
+
+    # Chọn SNR ngẫu nhiên
+    snr_db = rng.choice(snr_choices)
+
+    # Tạo mixture
+    mix, s1_out, s2_out = create_mixture(s1_audio, s2_audio, snr_db)
+
+    # Lưu file WAV, mỗi i là một tên unique nên không conflict
+    out_path = Path(output_dir)
+    fname = f"{i:06d}.wav"
+    try:
+        sf.write(str(out_path / "mix" / fname), mix, SAMPLE_RATE, subtype="FLOAT")
+        sf.write(str(out_path / "s1" / fname), s1_out, SAMPLE_RATE, subtype="FLOAT")
+        sf.write(str(out_path / "s2" / fname), s2_out, SAMPLE_RATE, subtype="FLOAT")
+    except OSError as e:
+        logger.error(f"Worker {i}: lỗi ghi file: {e}")
+        return None
+
+    return snr_db
+
 
 def generate_mixtures(
     split_dir: str,
@@ -124,22 +190,8 @@ def generate_mixtures(
     snr_choices: list[float] | None = None,
     seed: int = 42,
     max_offset_ratio: float = 0.25,
+    num_workers: int = 24,
 ) -> dict:
-    """Tạo num_mixtures hỗn hợp, lưu vào output_dir/{mix,s1,s2}/.
-
-    Mỗi hỗn hợp chọn ngẫu nhiên 2 speakers khác nhau, 1 segment mỗi speaker,
-    và SNR ngẫu nhiên từ snr_choices.
-
-    Args:
-        split_dir: Đường dẫn tới thư mục split chứa segments.
-        output_dir: Đường dẫn output (vd: data_2mix/tr).
-        num_mixtures: Số hỗn hợp cần tạo.
-        snr_choices: Danh sách SNR (dB) để chọn ngẫu nhiên. Mặc định [0, 5, 10].
-        seed: Random seed (mặc định 42).
-
-    Returns:
-        Dict thống kê: mixtures_created, snr_distribution, elapsed_seconds.
-    """
     if snr_choices is None:
         snr_choices = DEFAULT_SNR_CHOICES
 
@@ -152,95 +204,69 @@ def generate_mixtures(
             logger.info(
                 f"SKIP: {output_dir} đã có {existing} mixtures (>= {num_mixtures})"
             )
-            return {"mixtures_created": existing, "snr_distribution": {}, "elapsed_seconds": 0.0, "skipped": True}
+            return {
+                "mixtures_created": existing,
+                "snr_distribution": {},
+                "elapsed_seconds": 0.0,
+                "skipped": True,
+            }
 
-    rng = random.Random(seed)
+    # Tạo thư mục output
+    for sub in ("mix", "s1", "s2"):
+        (out_path / sub).mkdir(parents=True, exist_ok=True)
 
-    # Liệt kê segments
+    # Kiểm tra đủ speakers trước (chỉ đọc 1 lần ở main)
     speaker_segments = list_segments(split_dir)
     speaker_ids = list(speaker_segments.keys())
-
     if len(speaker_ids) < 2:
         logger.warning(
             f"Cần ít nhất 2 speakers để tạo mixture, hiện có: {len(speaker_ids)}"
         )
-        return {"mixtures_created": 0, "snr_distribution": {}, "elapsed_seconds": 0.0}
+        return {
+            "mixtures_created": 0,
+            "snr_distribution": {},
+            "elapsed_seconds": 0.0,
+        }
 
     total_segs = sum(len(v) for v in speaker_segments.values())
     if total_segs < 2:
         logger.warning(f"Không đủ segment để tạo mixture (tổng: {total_segs})")
-        return {"mixtures_created": 0, "snr_distribution": {}, "elapsed_seconds": 0.0}
-
-    # Tạo thư mục output
-    out_path = Path(output_dir)
-    for sub in ("mix", "s1", "s2"):
-        (out_path / sub).mkdir(parents=True, exist_ok=True)
+        return {
+            "mixtures_created": 0,
+            "snr_distribution": {},
+            "elapsed_seconds": 0.0,
+        }
 
     start_time = time.time()
     snr_counter: Counter = Counter()
+
+    # Chuẩn bị argument cho từng mixture index
+    tasks = [
+        (i, split_dir, output_dir, snr_choices, seed, 10)  # max_retries = 10
+        for i in range(num_mixtures)
+    ]
+
+    # Sử dụng Pool 24 process (hoặc min(24, cpu_count()))
+    n_proc = min(num_workers, cpu_count())
+    logger.info(f"Dùng {n_proc} process để tạo {num_mixtures} mixtures")
+
     created = 0
-    max_retries = 10  # Số lần thử lại tối đa khi gặp file hỏng
+    with Pool(processes=n_proc) as pool:
+        # imap_unordered để nhận kết quả dần dần, có thể log tiến trình.[web:22]
+        for idx, snr_db in enumerate(pool.imap_unordered(_worker_one_mixture, tasks)):
+            if snr_db is None:
+                continue
+            snr_counter[snr_db] += 1
+            created += 1
 
-    for i in range(num_mixtures):
-        # Chọn 2 speakers khác nhau
-        spk1, spk2 = rng.sample(speaker_ids, 2)
-
-        # Chọn segment ngẫu nhiên từ mỗi speaker, retry nếu file hỏng
-        s1_audio = None
-        for _ in range(max_retries):
-            seg1_path = rng.choice(speaker_segments[spk1])
-            s1_audio = _read_wav_safe(seg1_path)
-            if s1_audio is not None:
-                break
-        if s1_audio is None:
-            logger.warning(f"Mixture {i}: Không đọc được segment từ {spk1}, bỏ qua")
-            continue
-
-        s2_audio = None
-        for _ in range(max_retries):
-            seg2_path = rng.choice(speaker_segments[spk2])
-            s2_audio = _read_wav_safe(seg2_path)
-            if s2_audio is not None:
-                break
-        if s2_audio is None:
-            logger.warning(f"Mixture {i}: Không đọc được segment từ {spk2}, bỏ qua")
-            continue
-
-        # Đảm bảo cùng độ dài (cắt theo min length)
-        min_len = min(len(s1_audio), len(s2_audio))
-        s1_audio = s1_audio[:min_len]
-        s2_audio = s2_audio[:min_len]
-
-        # Chọn SNR ngẫu nhiên
-        snr_db = rng.choice(snr_choices)
-
-        # Tạo mixture
-        mix, s1_out, s2_out = create_mixture(s1_audio, s2_audio, snr_db)
-
-        # Lưu file WAV
-        fname = f"{created:06d}.wav"
-        try:
-            sf.write(str(out_path / "mix" / fname), mix, SAMPLE_RATE, subtype="FLOAT")
-            sf.write(str(out_path / "s1" / fname), s1_out, SAMPLE_RATE, subtype="FLOAT")
-            sf.write(str(out_path / "s2" / fname), s2_out, SAMPLE_RATE, subtype="FLOAT")
-        except OSError as e:
-            logger.error(
-                f"Lỗi ghi file (có thể đĩa đầy): {e}\n"
-                f"Đã tạo {created}/{num_mixtures} mixtures trước khi lỗi.\n"
-                f"Kiểm tra dung lượng đĩa và thử lại."
-            )
-            break
-
-        snr_counter[snr_db] += 1
-        created += 1
-
-        # Log tiến trình mỗi 10%
-        if num_mixtures >= 10 and (i + 1) % (num_mixtures // 10) == 0:
-            logger.info(f"  Tiến trình: {i + 1}/{num_mixtures} ({100 * (i + 1) // num_mixtures}%)")
+            # Log tiến trình mỗi 10%
+            if num_mixtures >= 10 and (idx + 1) % (num_mixtures // 10) == 0:
+                logger.info(
+                    f"  Tiến trình (song song): {idx + 1}/{num_mixtures} "
+                    f"({100 * (idx + 1) // num_mixtures}%)"
+                )
 
     elapsed = time.time() - start_time
-
-    # Thống kê
     snr_dist = {str(k): v for k, v in sorted(snr_counter.items())}
     stats = {
         "mixtures_created": created,
@@ -248,7 +274,7 @@ def generate_mixtures(
         "elapsed_seconds": round(elapsed, 2),
     }
 
-    logger.info(f"Hoàn tất: {created}/{num_mixtures} mixtures")
+    logger.info(f"Hoàn tất (song song): {created}/{num_mixtures} mixtures")
     logger.info(f"Phân bố SNR: {snr_dist}")
     logger.info(f"Thời gian: {elapsed:.2f}s")
 
@@ -262,20 +288,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num-train",
         type=int,
-        default=20000,
-        help="Số hỗn hợp cho tập train (mặc định: 20000)",
+        default=80000,   # đổi 20000 -> 80000
+        help="Số hỗn hợp cho tập train (mặc định: 80000)",
     )
     parser.add_argument(
         "--num-val",
         type=int,
-        default=1000,
-        help="Số hỗn hợp cho tập validation (mặc định: 1000)",
+        default=4000,    # đổi 1000 -> 4000
+        help="Số hỗn hợp cho tập validation (mặc định: 4000)",
     )
     parser.add_argument(
         "--num-test",
         type=int,
-        default=1000,
-        help="Số hỗn hợp cho tập test (mặc định: 1000)",
+        default=4000,   # đổi 1000 -> 40000
+        help="Số hỗn hợp cho tập test (mặc định: 40000)",
     )
     parser.add_argument(
         "--output-dir",
@@ -288,6 +314,12 @@ if __name__ == "__main__":
         type=int,
         default=42,
         help="Random seed (mặc định: 42)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=24,
+        help="Số process song song (mặc định: 24)",
     )
 
     args = parser.parse_args()
@@ -304,13 +336,16 @@ if __name__ == "__main__":
 
     all_stats = {}
     for split_name, (split_dir, num_mix) in splits.items():
-        logger.info(f"\n--- {split_name.upper()} ({split_dir} → {args.output_dir}/{split_name}) ---")
+        logger.info(
+            f"\n--- {split_name.upper()} ({split_dir} → {args.output_dir}/{split_name}) ---"
+        )
         out_dir = str(Path(args.output_dir) / split_name)
         stats = generate_mixtures(
             split_dir=split_dir,
             output_dir=out_dir,
             num_mixtures=num_mix,
             seed=args.seed,
+            num_workers=args.workers,
         )
         all_stats[split_name] = stats
 

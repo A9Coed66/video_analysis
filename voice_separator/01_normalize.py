@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DEFAULT_SR = 16000
-DEFAULT_SEG_LEN = 4.0  # seconds
+DEFAULT_SEG_LEN = 6.0  # seconds
 DEFAULT_SILENCE_THRESHOLD = 1e-4
 SAMPLES_PER_SEGMENT = int(DEFAULT_SR * DEFAULT_SEG_LEN)  # 64000
 
@@ -189,7 +189,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data-source",
         type=str,
-        default="no_sound_effect",
+        default="/home/tuanlha/research/video_analysis/no_sound_effect",
         help="Đường dẫn tới thư mục data_source/ (mặc định: data_source)",
     )
     parser.add_argument(

@@ -1,7 +1,6 @@
 """Data models and response schemas for Voice Separator Web API."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
 
 from pydantic import BaseModel
 
@@ -12,13 +11,17 @@ class Job:
     job_id: str
     job_type: str          # "separate" | "pipeline"
     status: str            # "pending" | "processing" | "completed" | "failed"
-    created_at: datetime
-    updated_at: datetime
+    created_at: str        # ISO 8601 string (JSON-serializable)
+    updated_at: str        # ISO 8601 string (JSON-serializable)
     input_file: str
     current_step: str | None = None
     result_files: list[str] = field(default_factory=list)
     error_message: str | None = None
     transcript: list[dict] | None = None
+    retry_count: int = 0
+    gpu_device: int | None = None
+    celery_task_id: str | None = None
+
 
 
 class JobCreatedResponse(BaseModel):

@@ -205,3 +205,17 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+tests/
+testing/
+output/
+.kiro
+*.wav
+*.mp4
+*.mp3
+*.txt
+*.pth
+*.exe
+./Dual-Path-RNN-Pytorch
+testing/
+
+.vscode
