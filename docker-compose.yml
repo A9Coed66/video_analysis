@@ -1,0 +1,183 @@
+# =============================================================================
+# Docker Compose — Voice Separator Web (Production)
+# =============================================================================
+# Usage:
+#   cp .env.example .env   # fill in required values
+#   docker compose up -d
+#
+# Requirements: Docker Engine 24+, Docker Compose v2, NVIDIA Container Toolkit
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Nginx — reverse proxy, TLS termination, static file serving
+  # ---------------------------------------------------------------------------
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-changeme-key-1}
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ./web/static:/usr/share/nginx/html/static:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # API Server — FastAPI + Uvicorn (4 workers)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    networks:
+      - backend
+    expose:
+      - "8000"
+    volumes:
+      - data-uploads:/data/uploads
+      - data-results:/data/results
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Worker: Separation — DPRNN-TasNet on GPU 0
+  # ---------------------------------------------------------------------------
+  worker-separation:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      python -m celery -A worker.celery_app worker
+      -Q separation
+      -c ${CELERY_SEPARATION_CONCURRENCY:-1}
+      --loglevel=${LOG_LEVEL:-INFO}
+    env_file: .env
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${GPU_SEPARATION:-0}
+    networks:
+      - backend
+    volumes:
+      - data-uploads:/data/uploads:ro
+      - data-results:/data/results
+      - ${DPRNN_HOST_DIR:-./voice_separator/checkpoints_premium}:/models/dprnn:ro
+      - ${PIPELINE_HOST_DIR:-./pipeline/models}:/models/pipeline:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_SEPARATION:-0}"]
+              capabilities: [gpu]
+    restart: unless-stopped
+    stop_grace_period: 300s
+    healthcheck:
+      test: ["CMD", "python", "-m", "celery", "-A", "worker.celery_app", "inspect", "ping", "-t", "10"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Worker: Pipeline — full audio pipeline on GPU 1
+  # ---------------------------------------------------------------------------
+  worker-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      python -m celery -A worker.celery_app worker
+      -Q pipeline
+      -c ${CELERY_PIPELINE_CONCURRENCY:-1}
+      --loglevel=${LOG_LEVEL:-INFO}
+    env_file: .env
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${GPU_PIPELINE:-1}
+    networks:
+      - backend
+    volumes:
+      - data-uploads:/data/uploads:ro
+      - data-results:/data/results
+      - ${DPRNN_HOST_DIR:-./voice_separator/checkpoints_premium}:/models/dprnn:ro
+      - ${PIPELINE_HOST_DIR:-./pipeline/models}:/models/pipeline:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_PIPELINE:-1}"]
+              capabilities: [gpu]
+    restart: unless-stopped
+    stop_grace_period: 300s
+    healthcheck:
+      test: ["CMD", "python", "-m", "celery", "-A", "worker.celery_app", "inspect", "ping", "-t", "10"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Redis — message broker + job store (AOF persistence)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --appendfsync everysec
+    networks:
+      - backend
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  data-uploads:
+  data-results:
+  redis-data:
