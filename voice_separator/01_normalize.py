@@ -70,18 +70,21 @@ def load_and_resample(mp3_path: Path, target_sr: int = DEFAULT_SR) -> np.ndarray
 def cut_segments(
     audio: np.ndarray, sr: int = DEFAULT_SR, seg_len: float = DEFAULT_SEG_LEN
 ) -> list[np.ndarray]:
-    """Cắt audio thành các đoạn seg_len giây, bỏ phần dư < seg_len.
+    """Cắt audio thành các đoạn seg_len giây với 50% overlap, bỏ phần dư < seg_len.
+
+    Overlap 50%: segment i bắt đầu tại i * (samples_per_seg / 2).
+    Ví dụ: seg0 = [0 : L], seg1 = [L/2 : 3L/2], seg2 = [L : 2L], ...
 
     Returns:
         list[np.ndarray]: Danh sách segments, mỗi segment có đúng sr * seg_len samples.
     """
     samples_per_seg = int(sr * seg_len)
-    num_segments = len(audio) // samples_per_seg
+    hop = samples_per_seg // 2
     segments = []
-    for i in range(num_segments):
-        start = i * samples_per_seg
-        end = start + samples_per_seg
-        segments.append(audio[start:end])
+    start = 0
+    while start + samples_per_seg <= len(audio):
+        segments.append(audio[start : start + samples_per_seg])
+        start += hop
     return segments
 
 
