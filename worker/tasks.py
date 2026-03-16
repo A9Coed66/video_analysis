@@ -24,6 +24,7 @@ import structlog
 
 from worker.celery_app import app
 from worker.gpu_manager import GPUManager
+from worker.logging_config import log_job_event
 
 if TYPE_CHECKING:
     from web.job_store import RedisJobStore
@@ -94,12 +95,25 @@ def run_separation(
     gpu = _get_gpu_manager(gpu_device)
     log = logger.bind(job_id=job_id, task="separation", gpu_device=gpu_device)
 
+    import time as _time
+    _start = _time.perf_counter()
+
     try:
         # 1. Update status → processing
         job_store.update_status(
             job_id, "processing", current_step="separating", gpu_device=gpu_device,
         )
-        log.info("separation_started", input_path=input_path)
+        gpu_info = gpu.get_gpu_info()
+        vram_usage = gpu_info.get("vram_used", None)
+        log_job_event(
+            event="job_started",
+            job_id=job_id,
+            job_type="separation",
+            gpu_device=gpu_device,
+            vram_usage=vram_usage,
+            processing_time=None,
+            status="processing",
+        )
 
         # 2. Check VRAM availability
         if not gpu.check_vram_available():
@@ -131,17 +145,46 @@ def run_separation(
 
         # 6. Store result in job store
         job_store.set_result(job_id, copied_paths)
-        log.info("separation_completed", result_files=copied_paths)
+        processing_time = round((_time.perf_counter() - _start) * 1000, 2)
+        gpu_info = gpu.get_gpu_info()
+        log_job_event(
+            event="job_completed",
+            job_id=job_id,
+            job_type="separation",
+            gpu_device=gpu_device,
+            vram_usage=gpu_info.get("vram_used", None),
+            processing_time=processing_time,
+            status="completed",
+        )
 
         return {"job_id": job_id, "status": "completed", "result_files": copied_paths}
 
     except self.MaxRetriesExceededError:
-        log.error("separation_max_retries_exceeded")
+        processing_time = round((_time.perf_counter() - _start) * 1000, 2)
+        log_job_event(
+            event="job_failed",
+            job_id=job_id,
+            job_type="separation",
+            gpu_device=gpu_device,
+            vram_usage=None,
+            processing_time=processing_time,
+            status="failed",
+        )
         job_store.set_error(job_id, "Max retries exceeded for separation task")
         raise
 
     except Exception as exc:
         log.error("separation_failed", error=str(exc), exc_info=True)
+        processing_time = round((_time.perf_counter() - _start) * 1000, 2)
+        log_job_event(
+            event="job_failed",
+            job_id=job_id,
+            job_type="separation",
+            gpu_device=gpu_device,
+            vram_usage=None,
+            processing_time=processing_time,
+            status="failed",
+        )
         job_store.set_error(job_id, str(exc))
         gpu.cleanup()
 
@@ -193,6 +236,9 @@ def run_pipeline(
     gpu = _get_gpu_manager(gpu_device)
     log = logger.bind(job_id=job_id, task="pipeline", gpu_device=gpu_device)
 
+    import time as _time
+    _start = _time.perf_counter()
+
     def _status_callback(step: str) -> None:
         """Update job status with the current pipeline step."""
         job_store.update_status(job_id, "processing", current_step=step)
@@ -203,7 +249,17 @@ def run_pipeline(
         job_store.update_status(
             job_id, "processing", current_step="initializing", gpu_device=gpu_device,
         )
-        log.info("pipeline_started", input_path=input_path)
+        gpu_info = gpu.get_gpu_info()
+        vram_usage = gpu_info.get("vram_used", None)
+        log_job_event(
+            event="job_started",
+            job_id=job_id,
+            job_type="pipeline",
+            gpu_device=gpu_device,
+            vram_usage=vram_usage,
+            processing_time=None,
+            status="processing",
+        )
 
         # 2. Check VRAM availability
         if not gpu.check_vram_available():
@@ -240,7 +296,17 @@ def run_pipeline(
 
         # 7. Store result in job store (with transcript)
         job_store.set_result(job_id, copied_paths, transcript=result.transcript)
-        log.info("pipeline_completed", result_files=copied_paths)
+        processing_time = round((_time.perf_counter() - _start) * 1000, 2)
+        gpu_info = gpu.get_gpu_info()
+        log_job_event(
+            event="job_completed",
+            job_id=job_id,
+            job_type="pipeline",
+            gpu_device=gpu_device,
+            vram_usage=gpu_info.get("vram_used", None),
+            processing_time=processing_time,
+            status="completed",
+        )
 
         return {
             "job_id": job_id,
@@ -250,12 +316,31 @@ def run_pipeline(
         }
 
     except self.MaxRetriesExceededError:
-        log.error("pipeline_max_retries_exceeded")
+        processing_time = round((_time.perf_counter() - _start) * 1000, 2)
+        log_job_event(
+            event="job_failed",
+            job_id=job_id,
+            job_type="pipeline",
+            gpu_device=gpu_device,
+            vram_usage=None,
+            processing_time=processing_time,
+            status="failed",
+        )
         job_store.set_error(job_id, "Max retries exceeded for pipeline task")
         raise
 
     except Exception as exc:
         log.error("pipeline_failed", error=str(exc), exc_info=True)
+        processing_time = round((_time.perf_counter() - _start) * 1000, 2)
+        log_job_event(
+            event="job_failed",
+            job_id=job_id,
+            job_type="pipeline",
+            gpu_device=gpu_device,
+            vram_usage=None,
+            processing_time=processing_time,
+            status="failed",
+        )
         job_store.set_error(job_id, str(exc))
         gpu.cleanup()
 

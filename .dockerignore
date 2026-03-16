@@ -1,0 +1,68 @@
+# Version control
+.git/
+.gitignore
+
+# IDE / editor
+.vscode/
+.kiro/
+.cursor*
+
+# Python artifacts
+__pycache__/
+*.py[codz]
+*.egg-info/
+*.egg
+.hypothesis/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment files (secrets)
+.env
+
+# Test and training data
+tests/
+testing/
+training/
+no_sound_effect/
+
+# Large binary files
+*.wav
+*.mp3
+*.mp4
+*.pth
+*.exe
+
+# Model checkpoints (mounted as volumes instead)
+voice_separator/checkpoints_premium/
+voice_separator/data_2mix/
+voice_separator/segments*/
+voice_separator/separated_output/
+
+# Notebooks and docs
+*.ipynb
+*.md
+*.ipynb_checkpoints/
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Nginx (separate build context)
+nginx/
+
+# Redis data
+redis-data/
+
+# Data directory (mounted as volume)
+data/
+
+# Build artifacts
+build/
+dist/

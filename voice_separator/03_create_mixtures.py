@@ -1,7 +1,7 @@
 """
 03_create_mixtures.py — Tạo hỗn hợp 2 người nói (WSJ0-2mix style) với SNR ngẫu nhiên.
 
-Pipeline: liệt kê segments → chọn 2 speakers khác nhau → trộn với SNR → lưu WAV.
+Pipeline: liệt kê segments → ghép cặp 1-1 (mỗi audio chỉ dùng 1 lần) → trộn với SNR → lưu WAV.
 Output: data_2mix/{tr,cv,tt}/{mix,s1,s2}/{index:06d}.wav
 """
 
@@ -24,8 +24,11 @@ logger = logging.getLogger(__name__)
 
 # Constants
 SAMPLE_RATE = 16000
-SAMPLES_PER_SEGMENT = 64000  # 4s at 16kHz
+SAMPLES_PER_SEGMENT = 96000  # 6s at 16kHz
 DEFAULT_SNR_CHOICES = [0, 5, 10]
+# Giới hạn scale factor để không thay đổi biên độ s2 quá nhiều
+SCALE_MIN = 0.5
+SCALE_MAX = 2.0
 
 
 def list_segments(split_dir: str) -> dict[str, list[Path]]:
@@ -56,18 +59,27 @@ def list_segments(split_dir: str) -> dict[str, list[Path]]:
     return speaker_segments
 
 
-def compute_snr_scale(s1: np.ndarray, s2: np.ndarray, target_snr_db: float) -> float:
-    """Tính hệ số scale cho s2 để đạt target SNR so với s1.
+def compute_snr_scale(
+    s1: np.ndarray,
+    s2: np.ndarray,
+    target_snr_db: float,
+    scale_min: float = SCALE_MIN,
+    scale_max: float = SCALE_MAX,
+) -> float:
+    """Tính hệ số scale cho s2 để đạt target SNR so với s1, có giới hạn clamp.
 
     Công thức: scale = RMS(s1) / (RMS(s2) * 10^(SNR_db / 20))
+    Sau đó clamp vào [scale_min, scale_max] để không thay đổi biên độ s2 quá nhiều.
 
     Args:
         s1: Signal 1 (tham chiếu), numpy array float32.
         s2: Signal 2 (cần điều chỉnh), numpy array float32.
         target_snr_db: SNR mục tiêu tính bằng dB.
+        scale_min: Giới hạn dưới cho scale factor (mặc định 0.5).
+        scale_max: Giới hạn trên cho scale factor (mặc định 2.0).
 
     Returns:
-        Hệ số scale cho s2.
+        Hệ số scale cho s2, đã clamp trong [scale_min, scale_max].
     """
     rms_s1 = np.sqrt(np.mean(s1 ** 2))
     rms_s2 = np.sqrt(np.mean(s2 ** 2))
@@ -77,7 +89,8 @@ def compute_snr_scale(s1: np.ndarray, s2: np.ndarray, target_snr_db: float) -> f
         return 1.0
 
     scale = rms_s1 / (rms_s2 * (10.0 ** (target_snr_db / 20.0)))
-    return float(scale)
+    scale = float(np.clip(scale, scale_min, scale_max))
+    return scale
 
 
 def create_mixture(
@@ -116,46 +129,68 @@ def _read_wav_safe(wav_path: Path) -> np.ndarray | None:
         logger.warning(f"Không đọc được file WAV {wav_path}: {e}")
         return None
 
+
+def build_pairs(speaker_segments: dict[str, list[Path]], seed: int = 42) -> list[tuple[Path, Path]]:
+    """Ghép cặp audio 1-1 theo logic tuần tự, mỗi audio chỉ dùng 1 lần.
+
+    Duyệt từ speaker đầu tiên, lấy từng audio ghép với 1 audio của speaker khác
+    (còn trong danh sách chờ). Speaker khác được chọn theo xác suất tỉ lệ với
+    số audio còn lại — ví dụ B có 10 audio, C có 40 audio thì P(B)=20%, P(C)=80%.
+
+    Args:
+        speaker_segments: Dict {speaker_id: [wav_paths]}.
+        seed: Random seed để shuffle thứ tự audio trong mỗi speaker.
+
+    Returns:
+        List of (path_s1, path_s2) pairs.
+    """
+    rng = random.Random(seed)
+
+    # Tạo pool: mỗi speaker có 1 list audio đã shuffle
+    pool: dict[str, list[Path]] = {}
+    for spk_id, paths in speaker_segments.items():
+        shuffled = list(paths)
+        rng.shuffle(shuffled)
+        pool[spk_id] = shuffled
+
+    # Thứ tự duyệt speakers
+    speaker_order = sorted(pool.keys())
+
+    pairs: list[tuple[Path, Path]] = []
+
+    for current_spk in speaker_order:
+        while pool[current_spk]:
+            # Tìm speaker khác còn audio
+            other_spks = [s for s in speaker_order if s != current_spk and pool[s]]
+            if not other_spks:
+                break
+
+            # Chọn speaker khác theo xác suất tỉ lệ số audio còn lại
+            weights = [len(pool[s]) for s in other_spks]
+            other_spk = rng.choices(other_spks, weights=weights, k=1)[0]
+
+            s1_path = pool[current_spk].pop(0)
+            s2_idx = rng.randrange(len(pool[other_spk]))
+            s2_path = pool[other_spk].pop(s2_idx)
+            pairs.append((s1_path, s2_path))
+
+    return pairs
+
+
 def _worker_one_mixture(args):
     """Hàm worker chạy trong process con, tạo 1 mixture và lưu 3 file.
 
     Args:
-        args: tuple
-          (i, split_dir, output_dir, snr_choices, seed, max_retries)
+        args: tuple (index, s1_path, s2_path, snr_db, output_dir)
     """
-    (i, split_dir, output_dir, snr_choices, seed, max_retries) = args
+    (i, s1_path, s2_path, snr_db, output_dir) = args
 
-    rng = random.Random(seed + i)
-
-    # Liệt kê segments (mỗi worker tự load)
-    speaker_segments = list_segments(split_dir)
-    speaker_ids = list(speaker_segments.keys())
-
-    if len(speaker_ids) < 2:
-        return None  # không tạo được
-
-    # Chọn 2 speakers khác nhau
-    spk1, spk2 = rng.sample(speaker_ids, 2)
-
-    # Chọn segment ngẫu nhiên từ mỗi speaker, retry nếu file hỏng
-    s1_audio = None
-    for _ in range(max_retries):
-        seg1_path = rng.choice(speaker_segments[spk1])
-        s1_audio = _read_wav_safe(seg1_path)
-        if s1_audio is not None:
-            break
+    s1_audio = _read_wav_safe(Path(s1_path))
     if s1_audio is None:
-        logger.warning(f"Mixture {i}: Không đọc được segment từ {spk1}, bỏ qua")
         return None
 
-    s2_audio = None
-    for _ in range(max_retries):
-        seg2_path = rng.choice(speaker_segments[spk2])
-        s2_audio = _read_wav_safe(seg2_path)
-        if s2_audio is not None:
-            break
+    s2_audio = _read_wav_safe(Path(s2_path))
     if s2_audio is None:
-        logger.warning(f"Mixture {i}: Không đọc được segment từ {spk2}, bỏ qua")
         return None
 
     # Đảm bảo cùng độ dài (cắt theo min length)
@@ -163,13 +198,10 @@ def _worker_one_mixture(args):
     s1_audio = s1_audio[:min_len]
     s2_audio = s2_audio[:min_len]
 
-    # Chọn SNR ngẫu nhiên
-    snr_db = rng.choice(snr_choices)
-
     # Tạo mixture
     mix, s1_out, s2_out = create_mixture(s1_audio, s2_audio, snr_db)
 
-    # Lưu file WAV, mỗi i là một tên unique nên không conflict
+    # Lưu file WAV
     out_path = Path(output_dir)
     fname = f"{i:06d}.wav"
     try:
@@ -186,17 +218,51 @@ def _worker_one_mixture(args):
 def generate_mixtures(
     split_dir: str,
     output_dir: str,
-    num_mixtures: int,
     snr_choices: list[float] | None = None,
     seed: int = 42,
-    max_offset_ratio: float = 0.25,
     num_workers: int = 24,
 ) -> dict:
+    """Tạo mixtures bằng cách ghép cặp 1-1 (mỗi audio chỉ dùng 1 lần).
+
+    Số lượng mixtures = số cặp ghép được (phụ thuộc vào dữ liệu).
+    """
     if snr_choices is None:
         snr_choices = DEFAULT_SNR_CHOICES
 
-    # Skip nếu đã có đủ file
+    # Tạo thư mục output
     out_path = Path(output_dir)
+    for sub in ("mix", "s1", "s2"):
+        (out_path / sub).mkdir(parents=True, exist_ok=True)
+
+    # Liệt kê segments
+    speaker_segments = list_segments(split_dir)
+    speaker_ids = list(speaker_segments.keys())
+    if len(speaker_ids) < 2:
+        logger.warning(
+            f"Cần ít nhất 2 speakers để tạo mixture, hiện có: {len(speaker_ids)}"
+        )
+        return {
+            "mixtures_created": 0,
+            "snr_distribution": {},
+            "elapsed_seconds": 0.0,
+        }
+
+    total_segs = sum(len(v) for v in speaker_segments.values())
+    logger.info(f"Tổng segments: {total_segs} từ {len(speaker_ids)} speakers")
+
+    # Ghép cặp 1-1
+    pairs = build_pairs(speaker_segments, seed=seed)
+    num_mixtures = len(pairs)
+    logger.info(f"Số cặp ghép được: {num_mixtures}")
+
+    if num_mixtures == 0:
+        return {
+            "mixtures_created": 0,
+            "snr_distribution": {},
+            "elapsed_seconds": 0.0,
+        }
+
+    # Skip nếu đã có đủ file
     mix_dir = out_path / "mix"
     if mix_dir.exists():
         existing = len(list(mix_dir.glob("*.wav")))
@@ -211,48 +277,22 @@ def generate_mixtures(
                 "skipped": True,
             }
 
-    # Tạo thư mục output
-    for sub in ("mix", "s1", "s2"):
-        (out_path / sub).mkdir(parents=True, exist_ok=True)
-
-    # Kiểm tra đủ speakers trước (chỉ đọc 1 lần ở main)
-    speaker_segments = list_segments(split_dir)
-    speaker_ids = list(speaker_segments.keys())
-    if len(speaker_ids) < 2:
-        logger.warning(
-            f"Cần ít nhất 2 speakers để tạo mixture, hiện có: {len(speaker_ids)}"
-        )
-        return {
-            "mixtures_created": 0,
-            "snr_distribution": {},
-            "elapsed_seconds": 0.0,
-        }
-
-    total_segs = sum(len(v) for v in speaker_segments.values())
-    if total_segs < 2:
-        logger.warning(f"Không đủ segment để tạo mixture (tổng: {total_segs})")
-        return {
-            "mixtures_created": 0,
-            "snr_distribution": {},
-            "elapsed_seconds": 0.0,
-        }
-
     start_time = time.time()
     snr_counter: Counter = Counter()
+    rng = random.Random(seed)
 
-    # Chuẩn bị argument cho từng mixture index
-    tasks = [
-        (i, split_dir, output_dir, snr_choices, seed, 10)  # max_retries = 10
-        for i in range(num_mixtures)
-    ]
+    # Chuẩn bị tasks: mỗi pair gán 1 SNR ngẫu nhiên
+    tasks = []
+    for i, (s1_path, s2_path) in enumerate(pairs):
+        snr_db = rng.choice(snr_choices)
+        tasks.append((i, str(s1_path), str(s2_path), snr_db, output_dir))
 
-    # Sử dụng Pool 24 process (hoặc min(24, cpu_count()))
+    # Sử dụng Pool
     n_proc = min(num_workers, cpu_count())
     logger.info(f"Dùng {n_proc} process để tạo {num_mixtures} mixtures")
 
     created = 0
     with Pool(processes=n_proc) as pool:
-        # imap_unordered để nhận kết quả dần dần, có thể log tiến trình.[web:22]
         for idx, snr_db in enumerate(pool.imap_unordered(_worker_one_mixture, tasks)):
             if snr_db is None:
                 continue
@@ -283,25 +323,7 @@ def generate_mixtures(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Tạo hỗn hợp 2 người nói (WSJ0-2mix style) với SNR ngẫu nhiên."
-    )
-    parser.add_argument(
-        "--num-train",
-        type=int,
-        default=80000,   # đổi 20000 -> 80000
-        help="Số hỗn hợp cho tập train (mặc định: 80000)",
-    )
-    parser.add_argument(
-        "--num-val",
-        type=int,
-        default=4000,    # đổi 1000 -> 4000
-        help="Số hỗn hợp cho tập validation (mặc định: 4000)",
-    )
-    parser.add_argument(
-        "--num-test",
-        type=int,
-        default=4000,   # đổi 1000 -> 40000
-        help="Số hỗn hợp cho tập test (mặc định: 40000)",
+        description="Tạo hỗn hợp 2 người nói — ghép cặp 1-1, mỗi audio chỉ dùng 1 lần."
     )
     parser.add_argument(
         "--output-dir",
@@ -324,26 +346,22 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    splits = {
-        "tr": ("segments_tr", args.num_train),
-        "cv": ("segments_cv", args.num_val),
-        "tt": ("segments_tt", args.num_test),
-    }
+    splits = ["tr", "cv", "tt"]
 
     logger.info("=" * 60)
     logger.info("BẮT ĐẦU TẠO HỖN HỢP 2 NGƯỜI NÓI")
     logger.info("=" * 60)
 
     all_stats = {}
-    for split_name, (split_dir, num_mix) in splits.items():
-        logger.info(
-            f"\n--- {split_name.upper()} ({split_dir} → {args.output_dir}/{split_name}) ---"
-        )
+    for split_name in splits:
+        split_dir = f"segments_{split_name}"
         out_dir = str(Path(args.output_dir) / split_name)
+        logger.info(
+            f"\n--- {split_name.upper()} ({split_dir} → {out_dir}) ---"
+        )
         stats = generate_mixtures(
             split_dir=split_dir,
             output_dir=out_dir,
-            num_mixtures=num_mix,
             seed=args.seed,
             num_workers=args.workers,
         )
