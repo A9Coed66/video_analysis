@@ -9,7 +9,9 @@ Output: segments/{speaker_id}/{speaker_id}_{index:05d}.wav
 
 import argparse
 import logging
+import multiprocessing as mp
 import random
+from functools import partial
 from pathlib import Path
 
 import librosa
@@ -25,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DEFAULT_SR = 16000
-DEFAULT_SEG_LEN = 6.0  # seconds
-DEFAULT_MAX_PAD = 1.0  # max random silence padding (seconds)
+DEFAULT_SEG_LEN = 4.0  # seconds
+DEFAULT_MAX_PAD = 0.5  # max random silence padding (seconds)
 SAMPLES_PER_SEGMENT = int(DEFAULT_SR * DEFAULT_SEG_LEN)
 
 
@@ -36,17 +38,33 @@ SAMPLES_PER_SEGMENT = int(DEFAULT_SR * DEFAULT_SEG_LEN)
 _vad_model = None
 
 
+
 def get_vad_model():
-    """Load Silero VAD model (singleton)."""
+    """Load Silero VAD model (singleton).
+
+    Lần đầu (main process) sẽ download từ GitHub.
+    Các worker processes dùng source='local' từ cache để tránh race condition.
+    """
     global _vad_model
     if _vad_model is None:
-        _vad_model, _utils = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad",
-            model="silero_vad",
-            trust_repo=True,
-        )
+        # Kiểm tra cache đã tồn tại chưa
+        cache_dir = Path(torch.hub.get_dir()) / "snakers4_silero-vad_master"
+        if cache_dir.exists():
+            _vad_model, _utils = torch.hub.load(
+                repo_or_dir=str(cache_dir),
+                model="silero_vad",
+                source="local",
+                trust_repo=True,
+            )
+        else:
+            _vad_model, _utils = torch.hub.load(
+                repo_or_dir="snakers4/silero-vad",
+                model="silero_vad",
+                trust_repo=True,
+            )
         logger.info("Silero VAD model loaded")
     return _vad_model
+
 
 
 def detect_speech_segments(
@@ -142,91 +160,201 @@ def load_and_resample(mp3_path: Path, target_sr: int = DEFAULT_SR) -> np.ndarray
     return audio.astype(np.float32)
 
 
+# ---------------------------------------------------------------------------
+# Worker function for multiprocessing
+# ---------------------------------------------------------------------------
+
+def _process_single_file(
+    task: tuple,
+    target_sr: int = DEFAULT_SR,
+    seg_len: float = DEFAULT_SEG_LEN,
+    max_pad: float = DEFAULT_MAX_PAD,
+) -> dict:
+    """Worker: xử lý 1 file MP3 → trả về dict kết quả (không ghi file).
+
+    Args:
+        task: (mp3_path, speaker_id, speaker_output_dir, seg_start_index)
+
+    Returns:
+        dict với segments data và stats cho file này.
+    """
+    mp3_path, speaker_id, speaker_output_dir, seg_start_index = task
+
+    result = {
+        "speaker_id": speaker_id,
+        "ok": False,
+        "segments_written": 0,
+        "speech_regions": 0,
+        "error": None,
+        "skipped": False,
+    }
+
+    # Skip nếu đã có output WAV cho file này (resume sau crash)
+    speaker_output = Path(speaker_output_dir)
+    first_seg_path = speaker_output / f"{speaker_id}_{seg_start_index:05d}.wav"
+    if first_seg_path.exists():
+        # Đếm số segment đã tạo cho file này
+        existing = 0
+        while (speaker_output / f"{speaker_id}_{seg_start_index + existing:05d}.wav").exists():
+            existing += 1
+        result["ok"] = True
+        result["segments_written"] = existing
+        result["skipped"] = True
+        return result
+
+    try:
+        audio = load_and_resample(Path(mp3_path), target_sr)
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+
+    speech_timestamps = detect_speech_segments(audio, target_sr)
+    result["speech_regions"] = len(speech_timestamps)
+
+    if not speech_timestamps:
+        result["ok"] = True
+        return result
+
+    seg_index = seg_start_index
+    speaker_output = Path(speaker_output_dir)
+
+    for ts in speech_timestamps:
+        start_sample = int(ts["start"] * target_sr)
+        end_sample = int(ts["end"] * target_sr)
+        speech_chunk = audio[start_sample:end_sample]
+
+        cut_segments = pad_and_cut(speech_chunk, target_sr, seg_len, max_pad)
+
+        for seg in cut_segments:
+            out_path = speaker_output / f"{speaker_id}_{seg_index:05d}.wav"
+            sf.write(str(out_path), seg, target_sr, subtype="FLOAT")
+            seg_index += 1
+
+    result["ok"] = True
+    result["segments_written"] = seg_index - seg_start_index
+    return result
+
+
+DEFAULT_NUM_WORKERS = 16
+
+
 def normalize_all(
     data_source_dir: str,
     output_dir: str = "segments",
     target_sr: int = DEFAULT_SR,
     seg_len: float = DEFAULT_SEG_LEN,
     max_pad: float = DEFAULT_MAX_PAD,
+    num_workers: int = DEFAULT_NUM_WORKERS,
 ) -> dict:
-    """Pipeline chính: quét → resample → Silero VAD → pad + cắt 6s → lưu WAV.
+    """Pipeline chính (parallel): quét → phân phối file cho workers → tổng hợp stats.
 
     Args:
         data_source_dir: Đường dẫn tới thư mục data_source/.
         output_dir: Thư mục output cho segments.
         target_sr: Sample rate mục tiêu (mặc định 16000).
-        seg_len: Độ dài mỗi segment tính bằng giây (mặc định 6.0).
-        max_pad: Max random silence padding đầu/cuối mỗi speech segment (mặc định 1.0s).
+        seg_len: Độ dài mỗi segment tính bằng giây (mặc định 4.0).
+        max_pad: Max random silence padding đầu/cuối mỗi speech segment (mặc định 0.5s).
+        num_workers: Số process song song (mặc định 16).
 
     Returns:
         dict với thống kê.
     """
     speaker_files = scan_mp3_files(data_source_dir)
 
+    # Chuẩn bị output dirs và build task list
+    # Mỗi task = (mp3_path_str, speaker_id, speaker_output_dir_str, seg_start_index)
+    # Để tránh trùng filename, ta pre-assign seg_start_index cho mỗi file.
+    # Vì chưa biết trước mỗi file tạo bao nhiêu segment, ta dùng khoảng cách lớn.
+    SEG_INDEX_GAP = 100_000  # mỗi file được cấp tối đa 100k segment indices
+
+    all_tasks: list[tuple] = []
+    speaker_file_counts: dict[str, int] = {}
+
+    for speaker_id, mp3_paths in speaker_files.items():
+        speaker_output = Path(output_dir) / speaker_id
+        speaker_output.mkdir(parents=True, exist_ok=True)
+        speaker_file_counts[speaker_id] = len(mp3_paths)
+
+        for file_idx, mp3_path in enumerate(mp3_paths):
+            seg_start = file_idx * SEG_INDEX_GAP
+            all_tasks.append((
+                str(mp3_path),
+                speaker_id,
+                str(speaker_output),
+                seg_start,
+            ))
+
+    total_files = len(all_tasks)
+    max_cpus = mp.cpu_count() or 1
+    actual_workers = min(num_workers, total_files, max_cpus)
+    logger.info(
+        f"Bắt đầu xử lý {total_files} files với {actual_workers} workers"
+    )
+
+    # Pre-download Silero VAD model trong main process trước khi fork workers
+    # để tránh race condition khi nhiều worker cùng download master.zip
+    logger.info("Pre-loading Silero VAD model trước khi fork workers...")
+    get_vad_model()
+
+    # Tạo worker function với các tham số cố định
+    worker_fn = partial(
+        _process_single_file,
+        target_sr=target_sr,
+        seg_len=seg_len,
+        max_pad=max_pad,
+    )
+
+    # Chạy parallel
+    with mp.Pool(processes=actual_workers) as pool:
+        results = pool.map(worker_fn, all_tasks)
+
+    # Tổng hợp stats
     stats = {
         "files_processed": 0,
+        "files_skipped": 0,
         "total_segments": 0,
         "speech_regions_found": 0,
         "speakers": {},
     }
 
-    for speaker_id, mp3_paths in speaker_files.items():
-        speaker_output = Path(output_dir) / speaker_id
-        speaker_output.mkdir(parents=True, exist_ok=True)
+    # Group results by speaker
+    speaker_results: dict[str, list[dict]] = {}
+    for r in results:
+        sid = r["speaker_id"]
+        speaker_results.setdefault(sid, []).append(r)
 
-        speaker_segments = 0
-        speaker_speech_regions = 0
-        speaker_files_ok = 0
-        seg_index = 0
+    for speaker_id, file_results in speaker_results.items():
+        speaker_files_ok = sum(1 for r in file_results if r["ok"])
+        speaker_skipped = sum(1 for r in file_results if r.get("skipped"))
+        speaker_segments = sum(r["segments_written"] for r in file_results)
+        speaker_speech_regions = sum(r["speech_regions"] for r in file_results)
 
-        for mp3_path in mp3_paths:
-            try:
-                audio = load_and_resample(mp3_path, target_sr)
-            except Exception as e:
-                logger.warning(f"Không đọc được file {mp3_path}: {e}")
-                continue
-
-            speaker_files_ok += 1
-
-            # Silero VAD: detect speech regions
-            speech_timestamps = detect_speech_segments(audio, target_sr)
-            speaker_speech_regions += len(speech_timestamps)
-
-            if not speech_timestamps:
-                logger.warning(f"Không phát hiện speech trong {mp3_path}")
-                continue
-
-            for ts in speech_timestamps:
-                start_sample = int(ts["start"] * target_sr)
-                end_sample = int(ts["end"] * target_sr)
-                speech_chunk = audio[start_sample:end_sample]
-
-                # Tạo audio mới với random silent padding + cắt cứng 6s
-                cut_segments = pad_and_cut(speech_chunk, target_sr, seg_len, max_pad)
-
-                for seg in cut_segments:
-                    out_path = speaker_output / f"{speaker_id}_{seg_index:05d}.wav"
-                    sf.write(str(out_path), seg, target_sr, subtype="FLOAT")
-                    seg_index += 1
-                    speaker_segments += 1
+        # Log errors
+        for r in file_results:
+            if r["error"]:
+                logger.warning(f"Không đọc được file (speaker {speaker_id}): {r['error']}")
 
         stats["files_processed"] += speaker_files_ok
+        stats["files_skipped"] += speaker_skipped
         stats["total_segments"] += speaker_segments
         stats["speech_regions_found"] += speaker_speech_regions
         stats["speakers"][speaker_id] = {
             "files_processed": speaker_files_ok,
+            "files_skipped": speaker_skipped,
             "segments_created": speaker_segments,
             "speech_regions_found": speaker_speech_regions,
         }
 
         logger.info(
-            f"Speaker {speaker_id}: {speaker_files_ok} files → "
+            f"Speaker {speaker_id}: {speaker_files_ok} files ({speaker_skipped} skipped) → "
             f"{speaker_speech_regions} speech regions → {speaker_segments} segments"
         )
 
     logger.info("=" * 60)
     logger.info("THỐNG KÊ TỔNG HỢP")
+    logger.info(f"  Số workers:                  {actual_workers}")
     logger.info(f"  Số file xử lý:              {stats['files_processed']}")
+    logger.info(f"  Số file đã skip (có sẵn):   {stats['files_skipped']}")
     logger.info(f"  Số speech regions phát hiện: {stats['speech_regions_found']}")
     logger.info(f"  Số segment tạo được:         {stats['total_segments']}")
     logger.info("=" * 60)
@@ -242,7 +370,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data-source",
         type=str,
-        default="/home/tuanlha/research/video_analysis/no_sound_effect",
+        default="/home/tuanlha/Self_project/video_analysis/processed_asmr_local",
         help="Đường dẫn tới thư mục data_source/",
     )
     parser.add_argument(
@@ -269,6 +397,12 @@ if __name__ == "__main__":
         default=DEFAULT_MAX_PAD,
         help=f"Max random silence padding đầu/cuối (mặc định: {DEFAULT_MAX_PAD}s)",
     )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=DEFAULT_NUM_WORKERS,
+        help=f"Số process song song (mặc định: {DEFAULT_NUM_WORKERS})",
+    )
 
     args = parser.parse_args()
 
@@ -278,4 +412,5 @@ if __name__ == "__main__":
         target_sr=args.sr,
         seg_len=args.seg_len,
         max_pad=args.max_pad,
+        num_workers=args.num_workers,
     )

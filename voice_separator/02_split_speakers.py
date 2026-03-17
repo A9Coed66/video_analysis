@@ -83,16 +83,26 @@ def split_segments_random(
 
 def create_split_dirs(
     split_map: dict[str, list[tuple[str, Path]]],
+    segments_dir: str = "segments",
     output_dirs: dict[str, str] | None = None,
 ) -> None:
-    """Copy các segment files vào thư mục split tương ứng.
+    """Chia segment files vào thư mục split tương ứng.
+
+    Chiến lược tối ưu:
+      1. Copy val/test ra thư mục riêng (số lượng nhỏ ~20%)
+      2. Xóa các file val/test khỏi segments/
+      3. Rename segments/ → segments_tr/ (O(1), không copy)
 
     Cấu trúc output: segments_tr/<speaker_id>/<file.wav>
     """
     if output_dirs is None:
         output_dirs = DEFAULT_OUTPUT_DIRS
 
-    for split_name, segments in split_map.items():
+    seg_path = Path(segments_dir)
+
+    # --- Bước 1: Copy val & test ra ngoài ---
+    for split_name in ("val", "test"):
+        segments = split_map[split_name]
         out_dir = Path(output_dirs[split_name])
         if out_dir.exists():
             shutil.rmtree(out_dir)
@@ -105,12 +115,35 @@ def create_split_dirs(
             shutil.copy2(str(wav_path), str(speaker_out / wav_path.name))
             speakers_in_split.add(speaker_id)
 
-        label = {"train": "TRAIN", "val": "VAL", "test": "TEST"}.get(
-            split_name, split_name.upper()
-        )
+        label = {"val": "VAL", "test": "TEST"}[split_name]
         logger.info(f"--- {label} ({output_dirs[split_name]}) ---")
         logger.info(f"  Segments: {len(segments)}")
         logger.info(f"  Speakers: {len(speakers_in_split)} — {sorted(speakers_in_split)}")
+
+    # --- Bước 2: Xóa các file val/test khỏi segments/ ---
+    non_train_files = set()
+    for split_name in ("val", "test"):
+        for _, wav_path in split_map[split_name]:
+            non_train_files.add(wav_path)
+
+    for wav_path in non_train_files:
+        wav_path.unlink(missing_ok=True)
+
+    # Dọn thư mục speaker rỗng
+    for speaker_dir in seg_path.iterdir():
+        if speaker_dir.is_dir() and not any(speaker_dir.iterdir()):
+            speaker_dir.rmdir()
+
+    # --- Bước 3: Rename segments/ → segments_tr/ (instant) ---
+    train_dir = Path(output_dirs["train"])
+    if train_dir.exists():
+        shutil.rmtree(train_dir)
+    seg_path.rename(train_dir)
+
+    train_speakers = set(s for s, _ in split_map["train"])
+    logger.info(f"--- TRAIN ({output_dirs['train']}) ---")
+    logger.info(f"  Segments: {len(split_map['train'])}")
+    logger.info(f"  Speakers: {len(train_speakers)} — {sorted(train_speakers)}")
 
 
 if __name__ == "__main__":

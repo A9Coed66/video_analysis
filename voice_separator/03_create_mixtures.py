@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 SAMPLE_RATE = 16000
-SAMPLES_PER_SEGMENT = 96000  # 6s at 16kHz
+SAMPLES_PER_SEGMENT = 64000  # 4s at 16kHz
 DEFAULT_SNR_CHOICES = [0, 5, 10]
 # Giới hạn scale factor để không thay đổi biên độ s2 quá nhiều
 SCALE_MIN = 0.5
